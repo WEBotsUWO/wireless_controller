@@ -3,6 +3,7 @@
 #include <ESPAsyncWebServer.h>
 #include <AsyncTCP.h>
 #include <DNSServer.h>
+#include <ESP32Servo.h>
 
 DNSServer dnsServer;
 
@@ -12,6 +13,15 @@ const char* password = "WeBotsAnkle";
 
 // Set web server port number to 80
 AsyncWebServer server(80);
+
+Servo LEFTServo;  
+Servo RIGHTServo;
+
+int ServoLEFTPin = 18;   
+int ServoRIGHTPin = 19;
+
+volatile int joystickX = 0; // Horizontal
+volatile int joystickY = 0; // Vertical
 
 
 
@@ -340,6 +350,17 @@ const char index_html[] PROGMEM = R"rawliteral(
 };
       // Create JoyStick object into the DIV 'joy1Div'
       var Joy1 = new JoyStick("joy1Div");
+      var joy1X = document.getElementById("joy1X");
+      var joy1Y = document.getElementById("joy1Y");
+
+      setInterval(function () {
+  var x = Joy1.GetX();
+  var y = Joy1.GetY();
+  fetch(`/update?x=${x}&y=${y}`)
+    .then(response => response.text())
+    .then(data => console.log(data))
+    .catch(error => console.error('Error:', error));
+    }, 50);
 
     </script>
   </body>
@@ -353,9 +374,6 @@ unsigned long previousTime = 0;
 // Define timeout time in milliseconds (example: 2000ms = 2s)
 const long timeoutTime = 2000;
 
-/*void handleRoot() {
-    server.send(200, "text/html", htmlContent);
-}*/
 
 class CaptiveRequestHandler : public AsyncWebHandler {
 public:
@@ -378,18 +396,32 @@ void setupServer()
               Serial.println("Client Connected"); 
               }
               );
-    server.on("/get", HTTP_GET, [](AsyncWebServerRequest *request)
-              { });
+    server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (request->hasParam("x") && request->hasParam("y")) {
+      joystickX = request->getParam("x")->value().toInt();
+      joystickY = request->getParam("y")->value().toInt();
+      
+      Serial.print("Joystick X: ");
+      Serial.print(joystickX);
+      Serial.print(" Y: ");
+      Serial.println(joystickY);
+
+      // Immediately update servo positions based on the new joystick values
+      updateServos(joystickX, joystickY);
+    }
+  request->send(200, "text/plain", "Joystick position received");
+});
 }
+
 
 void setup() {
   Serial.begin(115200);
+  LEFTServo.attach(ServoLEFTPin);   
+  RIGHTServo.attach(ServoRIGHTPin);
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("ankle");
+  WiFi.softAP(ssid, password);
   setupServer();
 
-  // Connect to Wi-Fi network with SSID and password
-  //WiFi.softAP(ssid, password);
 
   IPAddress IP = WiFi.softAPIP();
   Serial.print("AP IP address: ");
@@ -401,13 +433,28 @@ void setup() {
   Serial.println("");
   Serial.println("WiFi connected.");
   Serial.println("IP address: ");
-  //server.on("/", handleRoot); // Serve the HTML page
   dnsServer.start(53, "*", WiFi.softAPIP());
   server.addHandler(new CaptiveRequestHandler()).setFilter(ON_AP_FILTER);
   server.begin();
 }
 
 void loop(){
- // WiFiClient client = server.available();   // Listen for incoming clients
-  //server.handleClient();
+ dnsServer.processNextRequest();
+}
+void updateServos(int x, int y) {
+  // Map joystick values to servo positions
+  int VerticalServoPosition = map(y, -100, 100, 60, 120); // Assuming joystick Y goes from -100 to 100
+  int HorizontalAdjustment = map(x, -100, 100, -20, 20); // Assuming joystick X goes from -100 to 100
+  
+  int LEFTServoPosition = constrain(VerticalServoPosition + HorizontalAdjustment, 60, 120);
+  int RIGHTServoPosition = constrain(VerticalServoPosition - HorizontalAdjustment, 60, 120);
+  
+  LEFTServo.write(LEFTServoPosition);       
+  RIGHTServo.write(180 - RIGHTServoPosition); // Invert direction for one servo
+
+  // Debug output to serial monitor
+  Serial.print("LEFTServoPosition: ");
+  Serial.print(LEFTServoPosition);
+  Serial.print(" RIGHTServoPosition: ");
+  Serial.println(RIGHTServoPosition);
 }
