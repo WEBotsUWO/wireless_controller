@@ -1,9 +1,9 @@
-#include <Servo.h>  
+#include <ESP32Servo.h>  
 
-int ServoLEFTPin = 8 ;   
-int ServoRIGHTPin = 7 ;   
-int HorizontalPotPin = A1;  
-int VerticalPotPin = A0;  
+int ServoLEFTPin = 18 ;   
+int ServoRIGHTPin = 19 ;   
+int HorizontalPotPin = 35;  
+int VerticalPotPin = 34;  
 
 
 Servo LEFTServo;  
@@ -32,10 +32,10 @@ void loop()
   int HorizontalPotValue = analogRead(HorizontalPotPin); 
 
   // For vertical movements: Both servos move in sync
-  int VerticalServoPosition = map(VerticalPotValue, 0, 1023, 60, 120); // 90 ± 30 degrees for flexion/extension
+  int VerticalServoPosition = map(VerticalPotValue, 0, 4095, 60, 120); // 90 ± 30 degrees for flexion/extension
   
   // For horizontal movements: Servos move inversely within a ±20 degree range from their current vertical position
-  int HorizontalAdjustment = map(HorizontalPotValue, 0, 1023, -20, 20); 
+  int HorizontalAdjustment = map(HorizontalPotValue, 0, 4095, -20, 20); 
   int LEFTServoPosition = constrain(VerticalServoPosition + HorizontalAdjustment, 60, 120);
   int RIGHTServoPosition = constrain(VerticalServoPosition - HorizontalAdjustment, 60, 120);
   LEFTServo.write(LEFTServoPosition);       
@@ -49,4 +49,5 @@ void loop()
   Serial.println(LEFTServoPosition);
   Serial.print("RIGHTServoPosition: ");
   Serial.println(RIGHTServoPosition);
+  delay(20);
 }
