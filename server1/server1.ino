@@ -4,14 +4,12 @@
 #include <AsyncTCP.h>
 #include <DNSServer.h>
 #include <ESP32Servo.h>
+#include <ESP32-TWAI-CAN.hpp>
 
 DNSServer dnsServer;
-
-// Replace with your network credentials
 const char* ssid = "ankle";
 const char* password = "WeBotsAnkle";
 
-// Set web server port number to 80
 AsyncWebServer server(80);
 
 Servo LEFTServo;  
@@ -20,367 +18,209 @@ Servo RIGHTServo;
 int ServoLEFTPin = 18;   
 int ServoRIGHTPin = 19;
 
-volatile int joystickX = 0; // Horizontal
-volatile int joystickY = 0; // Vertical
+volatile int joystick1X = 0; // Joystick 1 - Horizontal
+volatile int joystick1Y = 0; // Joystick 1 - Vertical
+volatile int joystick2Y = 0; // Joystick 2 - Vertical (only)
 
-
+#define CAN_TX 5
+#define CAN_RX 4
 
 const char index_html[] PROGMEM = R"rawliteral(
     <!DOCTYPE html>
 <html>
-  <head>
-    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-    <title>Joy</title>
-  </head>
-  <body>
-    <div class="row">
-      <div class="columnLateral">
-        <div id="joy1Div" style="width: 650px; height: 650px; margin: 175px">
-          <canvas id="joystick" width="650" height="650"></canvas>
-        </div>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <title>Dual Joysticks</title>
+  <style>
+    .joystick-container {
+      display: block; /* Stacks the containers vertically */
+      margin: 20px auto; /* Centers the joystick horizontally and adds vertical spacing */
+      text-align: center; /* Ensures the canvas is centered within the container */
+    }
+    /*canvas {
+      border: 1px solid #ccc;  Optional: Adds a border for visual distinction 
+    }*/
 
-      </div>
-  
-    <script type="text/javascript">
-    var JoyStick = function (container, parameters) {
-  parameters = parameters || {};
-  var title =
-      typeof parameters.title === "undefined" ? "joystick" : parameters.title,
-    width = typeof parameters.width === "undefined" ? 0 : parameters.width,
-    height = typeof parameters.height === "undefined" ? 0 : parameters.height,
-    internalFillColor =
-      typeof parameters.internalFillColor === "undefined"
-        ? "#00AA00"
-        : parameters.internalFillColor,
-    internalLineWidth =
-      typeof parameters.internalLineWidth === "undefined"
-        ? 2
-        : parameters.internalLineWidth,
-    internalStrokeColor =
-      typeof parameters.internalStrokeColor === "undefined"
-        ? "#003300"
-        : parameters.internalStrokeColor,
-    externalLineWidth =
-      typeof parameters.externalLineWidth === "undefined"
-        ? 2
-        : parameters.externalLineWidth,
-    externalStrokeColor =
-      typeof parameters.externalStrokeColor === "undefined"
-        ? "#008000"
-        : parameters.externalStrokeColor,
-    autoReturnToCenter =
-      typeof parameters.autoReturnToCenter === "undefined"
-        ? true
-        : parameters.autoReturnToCenter;
+  </style>
+</head>
+<body>
+  <div class="joystick-container" id="joy1Div">
+    <canvas id="joystick1" width="450" height="450"></canvas>
+  </div>
+  <div class="joystick-container" id="joy2Div">
+    <canvas id="joystick2" width="450" height="450"></canvas>
+  </div>
 
-  // Create Canvas element and add it in the Container object
-  var objContainer = document.getElementById(container);
-  var canvas = document.createElement("canvas");
-  canvas.id = title;
-  if (width === 0) {
-    width = objContainer.clientWidth;
-  }
-  if (height === 0) {
-    height = objContainer.clientHeight;
-  }
-  canvas.width = width;
-  canvas.height = height;
-  objContainer.appendChild(canvas);
-  var context = canvas.getContext("2d");
+  <script type="text/javascript">
+    function createJoystick(containerId) {
+  var JoyStick = function (container, parameters) {
+    parameters = parameters || {};
+    var title = parameters.title || "joystick",
+        width = parameters.width || 0,
+        height = parameters.height || 0,
+        internalFillColor = parameters.internalFillColor || "#00AA00",
+        internalLineWidth = parameters.internalLineWidth || 2,
+        internalStrokeColor = parameters.internalStrokeColor || "#003300",
+        externalLineWidth = parameters.externalLineWidth || 2,
+        externalStrokeColor = parameters.externalStrokeColor || "#008000",
+        autoReturnToCenter = parameters.autoReturnToCenter !== false;
 
-  var pressed = 0; // Bool - 1=Yes - 0=No
-  var circumference = 2 * Math.PI;
-  var internalRadius = (canvas.width - (canvas.width / 2 + 10)) / 2;
-  var maxMoveStick = internalRadius + 5;
-  var externalRadius = internalRadius + 30;
-  var centerX = canvas.width / 2;
-  var centerY = canvas.height / 2;
-  var directionHorizontalLimitPos = canvas.width / 10;
-  var directionHorizontalLimitNeg = directionHorizontalLimitPos * -1;
-  var directionVerticalLimitPos = canvas.height / 10;
-  var directionVerticalLimitNeg = directionVerticalLimitPos * -1;
-  // Used to save current position of stick
-  var movedX = centerX;
-  var movedY = centerY;
+    var objContainer = document.getElementById(container);
+    var canvas = objContainer.querySelector('canvas');
+    var context = canvas.getContext("2d");
 
-  // Check if the device support the touch or not
-  if ("ontouchstart" in document.documentElement) {
+    var pressed = false;
+    var circumference = 2 * Math.PI;
+    var internalRadius = (canvas.width - (canvas.width / 2 + 10)) / 2;
+    var maxMoveStick = internalRadius * 2; // Adjusted for more freedom
+    var externalRadius = internalRadius + 45;
+    var centerX = canvas.width / 2;
+    var centerY = canvas.height / 2;
+    var movedX = centerX;
+    var movedY = centerY;
+
+    // Add event listeners for touch and mouse events
     canvas.addEventListener("touchstart", onTouchStart, false);
     canvas.addEventListener("touchmove", onTouchMove, false);
     canvas.addEventListener("touchend", onTouchEnd, false);
-  } else {
     canvas.addEventListener("mousedown", onMouseDown, false);
     canvas.addEventListener("mousemove", onMouseMove, false);
     canvas.addEventListener("mouseup", onMouseUp, false);
-  }
-  // Draw the object
-  drawExternal();
-  drawInternal();
 
-  /******************************************************
-   * Private methods
-   *****************************************************/
+    // Draw joystick components
+    drawExternal();
+    drawInternal();
 
-  /**
-   * @desc Draw the external circle used as reference position
-   */
-  function drawExternal() {
-    context.beginPath();
-    context.arc(centerX, centerY, externalRadius, 0, circumference, false);
-    context.lineWidth = externalLineWidth;
-    context.strokeStyle = externalStrokeColor;
-    context.stroke();
-  }
-
-  /**
-   * @desc Draw the internal stick in the current position the user have moved it
-   */
-  function drawInternal() {
-    context.beginPath();
-    if (movedX < internalRadius) {
-      movedX = maxMoveStick;
+    function drawExternal() {
+      context.beginPath();
+      context.arc(centerX, centerY, externalRadius, 0, circumference, false);
+      context.lineWidth = externalLineWidth;
+      context.strokeStyle = externalStrokeColor;
+      context.stroke();
     }
-    if (movedX + internalRadius > canvas.width) {
-      movedX = canvas.width - maxMoveStick;
-    }
-    if (movedY < internalRadius) {
-      movedY = maxMoveStick;
-    }
-    if (movedY + internalRadius > canvas.height) {
-      movedY = canvas.height - maxMoveStick;
-    }
-    context.arc(movedX, movedY, internalRadius, 0, circumference, false);
-    // create radial gradient
-    var grd = context.createRadialGradient(
-      centerX,
-      centerY,
-      5,
-      centerX,
-      centerY,
-      200
-    );
-    // Light color
-    grd.addColorStop(0, internalFillColor);
-    // Dark color
-    grd.addColorStop(1, internalStrokeColor);
-    context.fillStyle = grd;
-    context.fill();
-    context.lineWidth = internalLineWidth;
-    context.strokeStyle = internalStrokeColor;
-    context.stroke();
-  }
 
-  /**
-   * @desc Events for manage touch
-   */
-  function onTouchStart(event) {
-    pressed = 1;
-  }
+    function drawInternal() {
+      context.beginPath();
+      context.arc(movedX, movedY, internalRadius, 0, circumference, false);
+      var grd = context.createRadialGradient(movedX, movedY, 5, movedX, movedY, internalRadius);
+      grd.addColorStop(0, internalFillColor);
+      grd.addColorStop(1, internalStrokeColor);
+      context.fillStyle = grd;
+      context.fill();
+      context.lineWidth = internalLineWidth;
+      context.strokeStyle = internalStrokeColor;
+      context.stroke();
+    }
 
-  function onTouchMove(event) {
-    // Prevent the browser from doing its default thing (scroll, zoom)
-    event.preventDefault();
-    if (pressed === 1 && event.targetTouches[0].target === canvas) {
-      movedX = event.targetTouches[0].pageX;
-      movedY = event.targetTouches[0].pageY;
-      // Manage offset
-      if (canvas.offsetParent.tagName.toUpperCase() === "BODY") {
-        movedX -= canvas.offsetLeft;
-        movedY -= canvas.offsetTop;
-      } else {
-        movedX -= canvas.offsetParent.offsetLeft;
-        movedY -= canvas.offsetParent.offsetTop;
+    function onTouchStart(event) {
+      pressed = true;
+    }
+
+    function onTouchMove(event) {
+      if (pressed) {
+        event.preventDefault();
+        var rect = canvas.getBoundingClientRect();
+        var touchX = event.touches[0].clientX - rect.left;
+        var touchY = event.touches[0].clientY - rect.top;
+        constrainMovement(touchX, touchY);
       }
-      // Delete canvas
+    }
+
+    function onTouchEnd() {
+      pressed = false;
+      if (autoReturnToCenter) {
+        resetJoystick();
+      }
+    }
+
+    function onMouseDown(event) {
+      pressed = true;
+    }
+
+    function onMouseMove(event) {
+      if (pressed) {
+        var rect = canvas.getBoundingClientRect();
+        var mouseX = event.clientX - rect.left;
+        var mouseY = event.clientY - rect.top;
+        constrainMovement(mouseX, mouseY);
+      }
+    }
+
+    function onMouseUp() {
+      pressed = false;
+      if (autoReturnToCenter) {
+        resetJoystick();
+      }
+    }
+
+    function constrainMovement(x, y) {
+      var dx = x - centerX;
+      var dy = y - centerY;
+      var distance = Math.sqrt(dx * dx + dy * dy);
+      var maxDistance = externalRadius - internalRadius;
+
+      // Allow movement up to the external boundary
+      if (distance > maxDistance) {
+        var angle = Math.atan2(dy, dx);
+        movedX = centerX + maxDistance * Math.cos(angle);
+        movedY = centerY + maxDistance * Math.sin(angle);
+      } else {
+        movedX = x;
+        movedY = y;
+      }
+
+      updateJoystick();
+    }
+
+    function updateJoystick() {
       context.clearRect(0, 0, canvas.width, canvas.height);
-      // Redraw object
       drawExternal();
       drawInternal();
     }
-  }
 
-  function onTouchEnd(event) {
-    pressed = 0;
-    // If required reset position store variable
-    if (autoReturnToCenter) {
+    function resetJoystick() {
       movedX = centerX;
       movedY = centerY;
+      updateJoystick();
     }
-    // Delete canvas
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    // Redraw object
-    drawExternal();
-    drawInternal();
-    //canvas.unbind('touchmove');
-  }
 
-  /**
-   * @desc Events for manage mouse
-   */
-  function onMouseDown(event) {
-    pressed = 1;
-  }
-
-  function onMouseMove(event) {
-    if (pressed === 1) {
-      movedX = event.pageX;
-      movedY = event.pageY;
-      // Manage offset
-      if (canvas.offsetParent.tagName.toUpperCase() === "BODY") {
-        movedX -= canvas.offsetLeft;
-        movedY -= canvas.offsetTop;
-      } else {
-        movedX -= canvas.offsetParent.offsetLeft;
-        movedY -= canvas.offsetParent.offsetTop;
-      }
-      // Delete canvas
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      // Redraw object
-      drawExternal();
-      drawInternal();
-    }
-  }
-
-  function onMouseUp(event) {
-    pressed = 0;
-    // If required reset position store variable
-    if (autoReturnToCenter) {
-      movedX = centerX;
-      movedY = centerY;
-    }
-    // Delete canvas
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    // Redraw object
-    drawExternal();
-    drawInternal();
-    //canvas.unbind('mousemove');
-  }
-
-  /******************************************************
-   * Public methods
-   *****************************************************/
-
-  /**
-   * @desc The width of canvas
-   * @return Number of pixel width
-   */
-  this.GetWidth = function () {
-    return canvas.width;
+    this.GetX = function () {
+      return (100 * ((movedX - centerX) / maxMoveStick)).toFixed();
+    };
+    this.GetY = function () {
+      return (100 * ((movedY - centerY) / maxMoveStick) * -1).toFixed();
+    };
   };
 
-  /**
-   * @desc The height of canvas
-   * @return Number of pixel height
-   */
-  this.GetHeight = function () {
-    return canvas.height;
-  };
+  return new JoyStick(containerId);
+}
 
-  /**
-   * @desc The X position of the cursor relative to the canvas that contains it and to its dimensions
-   * @return Number that indicate relative position
-   */
-  this.GetPosX = function () {
-    return movedX;
-  };
+    // Create joystick instances
+    var Joy1 = createJoystick("joy1Div");
+    var Joy2 = createJoystick("joy2Div");
 
-  /**
-   * @desc The Y position of the cursor relative to the canvas that contains it and to its dimensions
-   * @return Number that indicate relative position
-   */
-  this.GetPosY = function () {
-    return movedY;
-  };
+    // Update joystick data periodically
+    setInterval(function () {
+      var x1 = Joy1.GetX();
+      var y1 = Joy1.GetY();
+      var y2 = Joy2.GetY(); // Only vertical movement for the second joystick
 
-  /**
-   * @desc Normalizzed value of X move of stick
-   * @return Integer from -100 to +100
-   */
-  this.GetX = function () {
-    return (100 * ((movedX - centerX) / maxMoveStick)).toFixed();
-  };
-
-  /**
-   * @desc Normalizzed value of Y move of stick
-   * @return Integer from -100 to +100
-   */
-  this.GetY = function () {
-    return (100 * ((movedY - centerY) / maxMoveStick) * -1).toFixed();
-  };
-
-  /**
-   * @desc Get the direction of the cursor as a string that indicates the cardinal points where this is oriented
-   * @return String of cardinal point N, NE, E, SE, S, SW, W, NW and C when it is placed in the center
-   */
-  this.GetDir = function () {
-    var result = "";
-    var orizontal = movedX - centerX;
-    var vertical = movedY - centerY;
-
-    if (
-      vertical >= directionVerticalLimitNeg &&
-      vertical <= directionVerticalLimitPos
-    ) {
-      result = "C";
-    }
-    if (vertical < directionVerticalLimitNeg) {
-      result = "N";
-    }
-    if (vertical > directionVerticalLimitPos) {
-      result = "S";
-    }
-
-    if (orizontal < directionHorizontalLimitNeg) {
-      if (result === "C") {
-        result = "W";
-      } else {
-        result += "W";
-      }
-    }
-    if (orizontal > directionHorizontalLimitPos) {
-      if (result === "C") {
-        result = "E";
-      } else {
-        result += "E";
-      }
-    }
-
-    return result;
-  };
-};
-      // Create JoyStick object into the DIV 'joy1Div'
-      var Joy1 = new JoyStick("joy1Div");
-      var joy1X = document.getElementById("joy1X");
-      var joy1Y = document.getElementById("joy1Y");
-
-      setInterval(function () {
-  var x = Joy1.GetX();
-  var y = Joy1.GetY();
-  fetch(`/update?x=${x}&y=${y}`)
-    .then(response => response.text())
-    .then(data => console.log(data))
-    .catch(error => console.error('Error:', error));
+      fetch(`/update?x1=${x1}&y1=${y1}&y2=${y2}`)
+        .then(response => response.text())
+        .then(data => console.log(data))
+        .catch(error => console.error('Error:', error));
     }, 50);
-
-    </script>
-  </body>
+  </script>
+</body>
 </html>
 )rawliteral";
-
-// Current time
-unsigned long currentTime = millis();
-// Previous time
-unsigned long previousTime = 0; 
-// Define timeout time in milliseconds (example: 2000ms = 2s)
-const long timeoutTime = 2000;
-
 
 class CaptiveRequestHandler : public AsyncWebHandler {
 public:
     CaptiveRequestHandler() {}
     virtual ~CaptiveRequestHandler() {}
 
-    bool canHandle(AsyncWebServerRequest *request) override {
+    bool canHandle(AsyncWebServerRequest *request) {
         request->addInterestingHeader("ANY");
         return true;
     }
@@ -389,72 +229,138 @@ public:
         request->send_P(200, "text/html", index_html);
     }
 };
-void setupServer()
-{
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-              { request->send_P(200, "text/html", index_html); 
-              Serial.println("Client Connected"); 
-              }
-              );
+
+void setupServer() {
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send_P(200, "text/html", index_html);
+        Serial.println("Client Connected");
+    });
+
     server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request) {
-    if (request->hasParam("x") && request->hasParam("y")) {
-      joystickX = request->getParam("x")->value().toInt();
-      joystickY = request->getParam("y")->value().toInt();
-      
-      Serial.print("Joystick X: ");
-      Serial.print(joystickX);
-      Serial.print(" Y: ");
-      Serial.println(joystickY);
+        if (request->hasParam("x1") && request->hasParam("y1") && request->hasParam("y2")) {
+            joystick1X = request->getParam("x1")->value().toInt();
+            joystick1Y = request->getParam("y1")->value().toInt();
+            joystick2Y = request->getParam("y2")->value().toInt();
 
-      // Immediately update servo positions based on the new joystick values
-      updateServos(joystickX, joystickY);
-    }
-  request->send(200, "text/plain", "Joystick position received");
-});
+            Serial.print("Joystick 1 - X: ");
+            Serial.print(joystick1X);
+            Serial.print(" Y: ");
+            Serial.println(joystick1Y);
+
+            Serial.print("Joystick 2 - Y: ");
+            Serial.println(joystick2Y);
+
+            updateServos(joystick1X, joystick1Y);
+            sendCANMessage(joystick2Y);
+        }
+        request->send(200, "text/plain", "Joystick positions received");
+    });
 }
-
 
 void setup() {
-  Serial.begin(115200);
-  LEFTServo.attach(ServoLEFTPin);   
-  RIGHTServo.attach(ServoRIGHTPin);
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid, password);
-  setupServer();
+    Serial.begin(115200);
+    LEFTServo.attach(ServoLEFTPin);   
+    RIGHTServo.attach(ServoRIGHTPin);
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(ssid, password);
+    setupServer();
 
+    IPAddress IP = WiFi.softAPIP();
+    Serial.print("AP IP address: ");
+    Serial.println(IP);
 
-  IPAddress IP = WiFi.softAPIP();
-  Serial.print("AP IP address: ");
-  Serial.println(IP);
+    dnsServer.start(53, "*", WiFi.softAPIP());
+    server.addHandler(new CaptiveRequestHandler()).setFilter(ON_AP_FILTER);
+    server.begin();
 
-
-
-  // Print local IP address and start web server
-  Serial.println("");
-  Serial.println("WiFi connected.");
-  Serial.println("IP address: ");
-  dnsServer.start(53, "*", WiFi.softAPIP());
-  server.addHandler(new CaptiveRequestHandler()).setFilter(ON_AP_FILTER);
-  server.begin();
+    ESP32Can.setPins(CAN_TX, CAN_RX);
+    ESP32Can.setSpeed(ESP32Can.convertSpeed(500)); // 500 kbps CAN speed
+    if (ESP32Can.begin()) {
+        Serial.println("CAN bus initialized.");
+    } else {
+        Serial.println("Failed to initialize CAN bus.");
+        while (1);
+    }
 }
 
-void loop(){
- dnsServer.processNextRequest();
+void loop() {
+    dnsServer.processNextRequest();
 }
+
 void updateServos(int x, int y) {
-  // Map joystick values to servo positions
-  int VerticalServoPosition = map(y, -100, 100, 60, 120); // Assuming joystick Y goes from -100 to 100
-  int HorizontalAdjustment = map(x, -100, 100, -20, 20); // Assuming joystick X goes from -100 to 100
-  
-  int LEFTServoPosition = constrain(VerticalServoPosition + HorizontalAdjustment, 60, 120);
-  int RIGHTServoPosition = constrain(VerticalServoPosition - HorizontalAdjustment, 60, 120);
-  
-  LEFTServo.write(LEFTServoPosition);       
-  RIGHTServo.write(180 - RIGHTServoPosition); // Invert direction for one servo
+    int VerticalServoPosition = map(y, -100, 100, 70, 110);
+    int HorizontalAdjustment = map(x, -100, 100, -20, 20);
 
-  // Debug output to serial monitor
-  Serial.print("LEFTServoPosition: ");
-  Serial.print(LEFTServoPosition);
-  Serial.print(" RIGHTServoPosition: ");
-  Serial.println(RIGHTServoPosition);
+    int TargetLEFTServoPosition = constrain(VerticalServoPosition + HorizontalAdjustment, 0, 40);
+    int TargetRIGHTServoPosition = constrain(VerticalServoPosition - HorizontalAdjustment, 0, 40);
+
+    int CurrentLEFTServoPosition = LEFTServo.read();    // Get the current position of the left servo
+    int CurrentRIGHTServoPosition = 180 - RIGHTServo.read();  // Get the current position of the right servo
+
+    int StepSize = 2; // Adjust this value to control the speed 
+
+    // Gradually move the LEFT servo towards the target position
+    if (CurrentLEFTServoPosition < TargetLEFTServoPosition) {
+        for (int pos = CurrentLEFTServoPosition; pos <= TargetLEFTServoPosition; pos += StepSize) {
+            LEFTServo.write(pos);
+            delay(15); // Adjust delay for speed control; increase for slower movement
+        }
+    } else if (CurrentLEFTServoPosition > TargetLEFTServoPosition) {
+        for (int pos = CurrentLEFTServoPosition; pos >= TargetLEFTServoPosition; pos -= StepSize) {
+            LEFTServo.write(pos);
+            delay(15); // Adjust delay for speed control
+        }
+    }
+
+    // Gradually move the RIGHT servo towards the target position
+    if (CurrentRIGHTServoPosition < TargetRIGHTServoPosition) {
+        for (int pos = CurrentRIGHTServoPosition; pos <= TargetRIGHTServoPosition; pos += StepSize) {
+            RIGHTServo.write(180 - pos);  // Inverting direction for the servo
+            delay(15); // Adjust delay for speed control
+        }
+    } else if (CurrentRIGHTServoPosition > TargetRIGHTServoPosition) {
+        for (int pos = CurrentRIGHTServoPosition; pos >= TargetRIGHTServoPosition; pos -= StepSize) {
+            RIGHTServo.write(180 - pos);  // Inverting direction for the servo
+            delay(15); // Adjust delay for speed control
+        }
+    }
+}
+
+void sendCANMessage(int y) {
+    CanFrame frame;
+    frame.identifier = 0x02040000; // Replace with the appropriate CAN ID for motor control
+    frame.extd = 1; // Extended frame
+    frame.data_length_code = 8;
+
+    // Map the Y position from -100 to 100 to a speed range, for example, -255 to 255 for motor speed control
+    int speed = map(y, -100, 100, -100, 100); // Adjust the mapping as needed
+
+    // Set direction and speed in the CAN frame data
+    if (speed >= 0) {
+        frame.data[0] = 0x01; // Example: 0x01 for forward direction (you may need to replace this with the appropriate value for your SPARK MAX)
+    } else {
+        frame.data[0] = 0x02; // Example: 0x02 for reverse direction (replace with the appropriate value if needed)
+        speed = abs(speed);   // Ensure speed is positive for data transmission
+    }
+
+    frame.data[1] = (uint8_t)(speed & 0xFF); // Speed as an 8-bit value (low byte)
+    frame.data[2] = 0;                       // Padding or additional data, if required
+    frame.data[3] = 0;                       // Padding or additional data, if required
+    frame.data[4] = 0;                       // Padding or additional data, if required
+    frame.data[5] = 0;                       // Padding or additional data, if required
+    frame.data[6] = 0;                       // Padding or additional data, if required
+    frame.data[7] = 0;                       // Padding or additional data, if required
+
+    // Send the CAN frame
+    if (ESP32Can.writeFrame(frame)) {
+        Serial.print("CAN frame sent. Speed: ");
+        Serial.print(speed);
+        if (frame.data[0] == 0x01) {
+            Serial.println(" (Forward)");
+        } else {
+            Serial.println(" (Reverse)");
+        }
+    } else {
+        Serial.println("Failed to send CAN frame.");
+    }
 }
